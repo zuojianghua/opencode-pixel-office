@@ -7,13 +7,13 @@ type TodoPanelProps = {
 const TodoPanel = ({ todos }: TodoPanelProps) => (
   <div className="data-panel">
     <div className="gamish-panel-title">
-      <span>QUEST LOG</span>
+      <span>任务列表</span>
     </div>
 
     <div className="flex flex-col gap-1 max-h-[300px] overflow-y-auto pr-1">
       {todos.length === 0 ? (
         <div className="p-4 text-center border-2 border-dashed border-slate-700 rounded-lg">
-          <span className="text-slate-600 text-[9px] uppercase">No active quests</span>
+          <span className="text-slate-600 text-[9px] uppercase">暂无进行中的任务</span>
         </div>
       ) : (
         todos.map((todo) => (
@@ -30,7 +30,7 @@ const TodoPanel = ({ todos }: TodoPanelProps) => (
             </div>
             <div className="flex gap-2 mt-1">
               {todo.status === 'in_progress' && (
-                <span className="text-[8px] text-amber-500 animate-pulse">▶ IN PROGRESS</span>
+                <span className="text-[8px] text-amber-500 animate-pulse">▶ 进行中</span>
               )}
             </div>
           </div>

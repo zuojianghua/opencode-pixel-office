@@ -71,16 +71,16 @@ const App = () => {
   const todoSummary = lastTodoSummary
     ? `${lastTodoSummary.completed}/${lastTodoSummary.total}`
     : "0/0";
-  const bossMessageText = bossMessage?.text || "Awaiting mission updates...";
-  const bossStatus = bossMessage?.status ? bossMessage.status.toUpperCase() : "IDLE";
+  const bossMessageText = bossMessage?.text || "等待任务更新...";
+  const bossStatus = bossMessage?.status ? bossMessage.status.toUpperCase() : "空闲";
 
   return (
     <div className="app">
       <header>
         <div className="gamish-card logo-card">
           <div className="flex flex-col">
-            <h1 className="text-sm text-primary mb-1 tracking-widest">PIXEL OFFICE</h1>
-            <p className="text-[9px] text-muted-foreground">AI AGENT OPS // {version}</p>
+            <h1 className="text-sm text-primary mb-1 tracking-widest">像素办公室</h1>
+            <p className="text-[9px] text-muted-foreground">AI 智能体运维 // {version}</p>
           </div>
         </div>
 
@@ -109,14 +109,14 @@ const App = () => {
         </div>
 
         <div className={`status-badge ${connected ? "live" : ""}`}>
-          <span className="text-[8px] opacity-70 mb-1">SYSTEM STATUS</span>
-          <span className="font-bold">{connected ? "ONLINE" : "OFFLINE"}</span>
+          <span className="text-[8px] opacity-70 mb-1">系统状态</span>
+          <span className="font-bold">{connected ? "在线" : "离线"}</span>
           {networkIp && connected && (
             <div className="relative mt-2 border-t border-white/20 pt-1 flex flex-col items-center">
               <button
                 onClick={() => setShowQr(!showQr)}
                 className="text-[8px] font-normal opacity-80 hover:opacity-100 hover:text-accent cursor-pointer underline decoration-dotted"
-                title="Click to scan QR code"
+                title="点击扫描二维码"
               >
                 http://{networkIp}:5100
               </button>
@@ -131,7 +131,7 @@ const App = () => {
                       viewBox={`0 0 256 256`}
                     />
                   </div>
-                  <div className="text-[8px] text-center mt-1 text-foreground font-bold">SCAN ME</div>
+                  <div className="text-[8px] text-center mt-1 text-foreground font-bold">扫一扫</div>
                 </div>
               )}
             </div>

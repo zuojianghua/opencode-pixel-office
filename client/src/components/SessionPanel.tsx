@@ -48,29 +48,29 @@ const SessionPanel = ({
   return (
     <div className="data-panel">
       <div className="gamish-panel-title">
-        <span>MISSION LOG</span>
+        <span>任务日志</span>
       </div>
 
       <div className="grid grid-cols-2 gap-4 mb-4 text-[10px] text-muted-foreground">
         <div className="flex flex-col">
-          <span className="text-[8px] uppercase tracking-wider text-slate-500">Active Session</span>
+          <span className="text-[8px] uppercase tracking-wider text-slate-500">当前会话</span>
           <span className="text-secondary-foreground font-bold">{activeLabel}</span>
         </div>
         <div className="flex flex-col">
-          <span className="text-[8px] uppercase tracking-wider text-slate-500">System Ver</span>
+          <span className="text-[8px] uppercase tracking-wider text-slate-500">系统版本</span>
           <span className="text-secondary-foreground">{version}</span>
         </div>
         <div className="flex flex-col">
-          <span className="text-[8px] uppercase tracking-wider text-slate-500">Objectives</span>
+          <span className="text-[8px] uppercase tracking-wider text-slate-500">任务目标</span>
           <span className="text-secondary-foreground">{todoSummary}</span>
         </div>
       </div>
 
       <div className="mb-4">
-        <div className="text-[8px] uppercase tracking-wider text-slate-500 mb-2">Available Sessions</div>
+        <div className="text-[8px] uppercase tracking-wider text-slate-500 mb-2">可用会话</div>
         <div className="flex flex-col max-h-[220px] overflow-y-auto pr-1 space-y-1">
           {displaySessions.length === 0 ? (
-            <span className="text-muted-foreground text-[9px] italic">No active signals...</span>
+            <span className="text-muted-foreground text-[9px] italic">暂无活跃信号...</span>
           ) : (
             displaySessions.map((session) => (
               <button
@@ -88,16 +88,16 @@ const SessionPanel = ({
       </div>
 
       <div className="pt-4 border-t border-slate-700">
-        <div className="text-[8px] uppercase tracking-wider text-slate-500 mb-2">Session Intel</div>
+        <div className="text-[8px] uppercase tracking-wider text-slate-500 mb-2">会话详情</div>
         {selectedSession ? (
           <div className="space-y-1.5">
             <div className="flex flex-col">
-              <span className="text-[8px] text-slate-500">Identifier</span>
+              <span className="text-[8px] text-slate-500">标识符</span>
               <span className="text-[9px] text-slate-300 break-all">{formatSessionName(selectedSession)}</span>
             </div>
             {selectedSession.status && (
               <div className="flex justify-between items-center">
-                <span className="text-[8px] text-slate-500">Status</span>
+                <span className="text-[8px] text-slate-500">状态</span>
                 <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-800 border border-slate-600 inline-block">
                   {selectedSession.status}
                 </span>
@@ -105,19 +105,19 @@ const SessionPanel = ({
             )}
             {selectedSession.version && (
               <div className="flex justify-between">
-                <span className="text-[8px] text-slate-500">Core Ver</span>
+                <span className="text-[8px] text-slate-500">核心版本</span>
                 <span className="text-[9px] text-slate-400">{selectedSession.version}</span>
               </div>
             )}
             {selectedSession.directory && (
               <div className="flex flex-col mt-1">
-                <span className="text-[8px] text-slate-500">Path</span>
+                <span className="text-[8px] text-slate-500">路径</span>
                 <span className="text-[8px] font-mono text-slate-500 truncate">{selectedSession.directory}</span>
               </div>
             )}
           </div>
         ) : (
-          <span className="text-[9px] text-slate-600 italic">No session selected</span>
+          <span className="text-[9px] text-slate-600 italic">未选择会话</span>
         )}
       </div>
     </div>

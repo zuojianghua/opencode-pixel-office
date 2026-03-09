@@ -340,17 +340,17 @@ const pickTagColors = (sessionId?: string): [number, number] => {
 const statusBubbleText = (status: string) => {
   switch (status) {
     case "idle":
-      return "idle";
+      return "空闲";
     case "thinking":
-      return "thinking";
+      return "思考中";
     case "planning":
-      return "planning";
+      return "规划中";
     case "working":
-      return "working";
+      return "工作中";
     case "error":
-      return "error";
+      return "出错";
     default:
-      return "working";
+      return "工作中";
   }
 };
 
@@ -493,7 +493,7 @@ const buildTileTexture = (type: string) => {
   return texture;
 };
 const TitleBadge = ({ x, y, activeTab }: { x: number; y: number; activeTab?: "opencode" | "claude" }) => {
-  const titleText = activeTab === "claude" ? "Claude Office" : "OpenCode Office";
+  const titleText = activeTab === "claude" ? "Claude 办公室" : "OpenCode 办公室";
   const titleStyle = useMemo(
     () =>
       new TextStyle({
@@ -1422,7 +1422,7 @@ const SceneLayer = ({
           const statusText = statusBubbleText(agent.status || "working");
           const snippet = agent.lastMessageSnippet || "";
           const showGoodbye = Boolean(sprite.goodbyeUntil && Date.now() < sprite.goodbyeUntil);
-          const goodbyeText = "bye";
+          const goodbyeText = "再见";
           const messageText = showGoodbye
             ? goodbyeText
             : isStreaming

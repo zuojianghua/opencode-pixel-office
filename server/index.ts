@@ -16,7 +16,7 @@ const CLIENT_DIR = fs.existsSync(CLIENT_DIST_DIR)
   : path.join(__dirname, "..", "client");
 
 const app = express();
-app.use(express.json({ limit: "256kb" }));
+app.use(express.json({ limit: "5mb" }));
 app.use(express.static(CLIENT_DIR));
 
 const server = http.createServer(app);

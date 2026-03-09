@@ -232,7 +232,7 @@ main {
 }
 
 .pixi-wrapper::before {
-  content: "OFFICE_VIEW";
+  content: "办公室视图";
   position: absolute;
   top: -12px;
   left: 20px;
