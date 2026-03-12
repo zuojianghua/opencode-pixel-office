@@ -309,7 +309,7 @@ const statusRadius = (status: string) => {
 
 const shouldBeAtDesk = (status: string) => {
   const normalized = (status || "").toLowerCase();
-  return normalized !== "idle";
+  return normalized !== "idle" && normalized !== "";
 };
 
 const pickAvatarColor = (agent: Agent) => {
@@ -635,9 +635,6 @@ const SceneLayer = ({
           if (neighborState <= 0) {
             return false;
           }
-          if (!allowChairs && neighborState === 2) {
-            return false;
-          }
         }
       }
       return true;
@@ -697,7 +694,7 @@ const SceneLayer = ({
             return false;
           }
           const state = collisionMap.grid[row][col];
-          if (state <= 0 || state === 2) {
+          if (state <= 0) {
             return false;
           }
         }
@@ -920,7 +917,7 @@ const SceneLayer = ({
                 break;
               }
               const state = newGrid[rr][cc];
-              if (state <= 0 || state === 2) {
+              if (state <= 0) {
                 hasClearance = false;
                 break;
               }
@@ -1432,7 +1429,7 @@ const SceneLayer = ({
               break;
             }
             const state = collisionMap.grid[rr][cc];
-            if (state <= 0 || state === 2) {
+            if (state <= 0) {
               canMove = false;
               break;
             }
