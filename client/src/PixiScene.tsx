@@ -266,7 +266,7 @@ const pickMainExitNode = (
   exitNodes: { row: number; col: number }[],
   fallback: { row: number; col: number }
 ) => {
-  const base = doorNodes.length > 0 ? doorNodes : exitNodes;
+  const base = exitNodes.length > 0 ? exitNodes : fallback ? [fallback] : [];
   if (!base.length) {
     return fallback;
   }
@@ -1366,6 +1366,7 @@ const SceneLayer = ({
             sprite.targetKind = undefined;
             sprite.retargetAt = 0;
             sprite.wanderFailCount = 0;
+            sprite.lastMoveAt = now;
           }
           if (!sprite.wanderUntil) {
             sprite.idlePauseUntil = now + 2000;
@@ -1374,6 +1375,7 @@ const SceneLayer = ({
             sprite.targetTile = undefined;
             sprite.targetKind = undefined;
             sprite.retargetAt = 0;
+            sprite.lastMoveAt = now;
           }
         }
       }
