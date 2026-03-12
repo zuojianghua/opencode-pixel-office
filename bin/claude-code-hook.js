@@ -190,8 +190,14 @@ const mapHookToEvent = (input) => {
       event = {
         type: "session.idle",
         properties: {
-          sessionID: input.subagent_id || sessionId,
-          info,
+          sessionID: sessionId,
+          parentSessionId: sessionId,
+          subagentSessionID: input.subagent_id || "",
+          subagentID: input.subagent_id || "",
+          info: {
+            ...info,
+            agent: input.subagent_type || info.agent,
+          },
         },
       };
       break;

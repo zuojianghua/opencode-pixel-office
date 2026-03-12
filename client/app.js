@@ -370,8 +370,10 @@ const statusRadius = (status) => {
   }
 };
 
-const shouldBeAtDesk = (status) =>
-  status === "working" || status === "planning";
+const shouldBeAtDesk = (status) => {
+  const normalized = String(status || "").toLowerCase();
+  return normalized !== "idle";
+};
 
 const updateSprite = (sprite, agent) => {
   const dx = sprite.targetX - sprite.x;

@@ -45,6 +45,8 @@ type SpriteState = {
   dirLockUntil?: number;
   wanderUntil?: number;
   idlePauseUntil?: number;
+  deskGraceUntil?: number;
+  lastStatus?: string;
   workLockUntil?: number;
   lastMoveAt?: number;
   lastPosX?: number;
@@ -177,6 +179,7 @@ const EVENT_BADGE_COLORS: Record<string, number> = {
 };
 const EXIT_TTL_MS = 2600;
 const GOODBYE_TTL_MS = 1400;
+const IDLE_DESK_GRACE_MS = 7000;
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max);
@@ -304,8 +307,10 @@ const statusRadius = (status: string) => {
   }
 };
 
-const shouldBeAtDesk = (status: string) =>
-  status !== "idle" && status !== "";
+const shouldBeAtDesk = (status: string) => {
+  const normalized = (status || "").toLowerCase();
+  return normalized !== "idle";
+};
 
 const pickAvatarColor = (agent: Agent) => {
   const id = agent.id || "";
@@ -601,6 +606,8 @@ const SceneLayer = ({
     workCenters: { row: number, col: number }[];
     doorNodes: { row: number, col: number }[];
     exitNodes: { row: number, col: number }[];
+    transitNodes: { row: number, col: number }[];
+    slackNodes: { row: number, col: number }[];
   } | null>(null);
 
   // Helper to check walkability
@@ -615,15 +622,158 @@ const SceneLayer = ({
 
   const getRandomWalkable = (allowChairs: boolean) => {
     if (!collisionMap) return { row: 32, col: 32 };
+
+    const hasWalkableClearance = (row: number, col: number, radius: number) => {
+      for (let dr = -radius; dr <= radius; dr += 1) {
+        for (let dc = -radius; dc <= radius; dc += 1) {
+          const rr = row + dr;
+          const cc = col + dc;
+          if (rr < 0 || cc < 0 || rr >= collisionMap.rows || cc >= collisionMap.cols) {
+            return false;
+          }
+          const neighborState = collisionMap.grid[rr][cc];
+          if (neighborState <= 0) {
+            return false;
+          }
+          if (!allowChairs && neighborState === 2) {
+            return false;
+          }
+        }
+      }
+      return true;
+    };
+
     for (let i = 0; i < 80; i++) {
       const r = Math.floor(Math.random() * collisionMap.rows);
       const c = Math.floor(Math.random() * collisionMap.cols);
       const state = collisionMap.grid[r][c];
       if (state <= 0) continue;
       if (!allowChairs && state === 2) continue;
+      if (!hasWalkableClearance(r, c, allowChairs ? 0 : 1)) continue;
       return { row: r, col: c };
     }
-    return { row: 32, col: 32 };
+
+    const rowOffset = Math.floor(Math.random() * collisionMap.rows);
+    const colOffset = Math.floor(Math.random() * collisionMap.cols);
+    for (let ri = 0; ri < collisionMap.rows; ri += 1) {
+      const r = (ri + rowOffset) % collisionMap.rows;
+      for (let ci = 0; ci < collisionMap.cols; ci += 1) {
+        const c = (ci + colOffset) % collisionMap.cols;
+        const state = collisionMap.grid[r][c];
+        if (state <= 0) continue;
+        if (!allowChairs && state === 2) continue;
+        if (!hasWalkableClearance(r, c, allowChairs ? 0 : 1)) continue;
+        return { row: r, col: c };
+      }
+    }
+
+    return { row: Math.floor(collisionMap.rows / 2), col: Math.floor(collisionMap.cols / 2) };
+  };
+
+  const pickRandomNode = (nodes: { row: number; col: number }[]) => {
+    if (!nodes.length) {
+      return null;
+    }
+    return nodes[Math.floor(Math.random() * nodes.length)];
+  };
+
+  const pickIdleSlackTarget = (
+    currentTile: { row: number; col: number },
+    homeTile: { row: number; col: number },
+    isOccupied: (tile: { row: number; col: number }) => boolean,
+    reservedTargets: Set<string>,
+    crowdScore: (tile: { row: number; col: number }) => number
+  ) => {
+    if (!collisionMap) {
+      return getRandomWalkable(false);
+    }
+
+    const hasWalkableClearance = (tile: { row: number; col: number }, radius: number) => {
+      for (let dr = -radius; dr <= radius; dr += 1) {
+        for (let dc = -radius; dc <= radius; dc += 1) {
+          const row = tile.row + dr;
+          const col = tile.col + dc;
+          if (row < 0 || col < 0 || row >= collisionMap.rows || col >= collisionMap.cols) {
+            return false;
+          }
+          const state = collisionMap.grid[row][col];
+          if (state <= 0 || state === 2) {
+            return false;
+          }
+        }
+      }
+      return true;
+    };
+
+    const isBlockedTarget = (tile: { row: number; col: number }) =>
+      isOccupied(tile) ||
+      reservedTargets.has(nodeKey(tile.row, tile.col)) ||
+      !hasWalkableClearance(tile, 1);
+
+    const slackPool = collisionMap.slackNodes.filter((node) => !isBlockedTarget(node));
+    const transitPool = collisionMap.transitNodes.filter((node) => !isBlockedTarget(node));
+
+    const pickWithMinDistance = (
+      nodes: { row: number; col: number }[],
+      minDistanceFromDesk: number
+    ) => {
+      const filtered = nodes.filter(
+        (node) =>
+          Math.abs(node.row - homeTile.row) +
+            Math.abs(node.col - homeTile.col) >=
+          minDistanceFromDesk
+      );
+      const basePool = filtered.length > 0 ? filtered : nodes;
+      if (basePool.length === 0) {
+        return null;
+      }
+
+      const sampled: { row: number; col: number }[] = [];
+      const sampleCount = Math.min(24, basePool.length);
+      for (let i = 0; i < sampleCount; i += 1) {
+        const idx = Math.floor(Math.random() * basePool.length);
+        sampled.push(basePool[idx]);
+      }
+
+      let best = sampled[0] || null;
+      let bestScore = Number.NEGATIVE_INFINITY;
+      sampled.forEach((node) => {
+        const fromHome = Math.abs(node.row - homeTile.row) + Math.abs(node.col - homeTile.col);
+        const fromCurrent = Math.abs(node.row - currentTile.row) + Math.abs(node.col - currentTile.col);
+        const score = fromHome * 0.9 + fromCurrent * 0.35 - crowdScore(node) * 4.5;
+        if (score > bestScore) {
+          bestScore = score;
+          best = node;
+        }
+      });
+      return best;
+    };
+
+    const r = Math.random();
+    if (r < 0.65 && slackPool.length > 0) {
+      return (
+        pickWithMinDistance(slackPool, 10) ||
+        pickRandomNode(slackPool) ||
+        getRandomWalkable(false)
+      );
+    }
+    if (r < 0.9 && transitPool.length > 0) {
+      return (
+        pickWithMinDistance(transitPool, 6) ||
+        pickRandomNode(transitPool) ||
+        getRandomWalkable(false)
+      );
+    }
+
+    const driftPool = slackPool.concat(transitPool);
+    const byCurrentDistance = driftPool.filter(
+      (node) => Math.abs(node.row - currentTile.row) + Math.abs(node.col - currentTile.col) > 4
+    );
+    return (
+      pickWithMinDistance(byCurrentDistance, 4) ||
+      pickWithMinDistance(driftPool, 0) ||
+      getRandomWalkable(false)
+    );
   };
 
   // Load Collision Image
@@ -731,6 +881,67 @@ const SceneLayer = ({
         }
       }
 
+      const allWorkNodes = workCenters.length > 0 ? workCenters : workNodes;
+      const transitSet = new Set<string>();
+      const addTransitNearby = (nodes: { row: number; col: number }[], radius: number) => {
+        nodes.forEach((node) => {
+          for (let dr = -radius; dr <= radius; dr += 1) {
+            for (let dc = -radius; dc <= radius; dc += 1) {
+              const row = node.row + dr;
+              const col = node.col + dc;
+              if (row < 0 || col < 0 || row >= rows || col >= cols) continue;
+              const state = newGrid[row][col];
+              if (state <= 0 || state === 2) continue;
+              transitSet.add(nodeKey(row, col));
+            }
+          }
+        });
+      };
+      addTransitNearby(doorNodes, 5);
+      addTransitNearby(exitNodes, 7);
+      const transitNodes = Array.from(transitSet).map((entry) => {
+        const [row, col] = entry.split(",").map(Number);
+        return { row, col };
+      });
+
+      const slackNodes: { row: number; col: number }[] = [];
+      for (let r = 0; r < rows; r += 1) {
+        for (let c = 0; c < cols; c += 1) {
+          if (newGrid[r][c] !== 1) continue;
+          if (transitSet.has(nodeKey(r, c))) continue;
+
+          let hasClearance = true;
+          for (let dr = -1; dr <= 1 && hasClearance; dr += 1) {
+            for (let dc = -1; dc <= 1; dc += 1) {
+              const rr = r + dr;
+              const cc = c + dc;
+              if (rr < 0 || cc < 0 || rr >= rows || cc >= cols) {
+                hasClearance = false;
+                break;
+              }
+              const state = newGrid[rr][cc];
+              if (state <= 0 || state === 2) {
+                hasClearance = false;
+                break;
+              }
+            }
+          }
+          if (!hasClearance) continue;
+
+          let minWorkDist = Number.POSITIVE_INFINITY;
+          allWorkNodes.forEach((node) => {
+            const dist = Math.abs(node.row - r) + Math.abs(node.col - c);
+            if (dist < minWorkDist) {
+              minWorkDist = dist;
+            }
+          });
+
+          if (allWorkNodes.length === 0 || minWorkDist >= 10) {
+            slackNodes.push({ row: r, col: c });
+          }
+        }
+      }
+
       // Compute work chair centers (connected regions)
       const visited = Array.from({ length: rows }, () =>
         Array.from({ length: cols }, () => false)
@@ -794,7 +1005,17 @@ const SceneLayer = ({
         return base;
       });
 
-      setCollisionMap({ rows, cols, grid: newGrid, workNodes, workCenters, doorNodes, exitNodes });
+      setCollisionMap({
+        rows,
+        cols,
+        grid: newGrid,
+        workNodes,
+        workCenters,
+        doorNodes,
+        exitNodes,
+        transitNodes,
+        slackNodes,
+      });
       console.log("Generated Collision Map", { width: w, height: h, rows, cols });
     };
   }, []); // Run once
@@ -980,6 +1201,7 @@ const SceneLayer = ({
     const agentCache = agentCacheRef.current;
     const agentIds = new Set(agents.map((agent) => agent.id));
     const occupiedTiles = new Map<string, string>();
+    const reservedIdleTargets = new Set<string>();
     agents.forEach((agent) => {
       const sprite = spriteMap.get(agent.id);
       if (!sprite || sprite.exiting) {
@@ -994,13 +1216,45 @@ const SceneLayer = ({
         return;
       }
       const deskTarget = tileToPixel(sprite.homeTile);
+      const now = Date.now();
+      const normalizedStatus = (agent.status || "working").toLowerCase();
+      const previousStatus = sprite.lastStatus || normalizedStatus;
+
+      if (normalizedStatus !== "idle") {
+        sprite.deskGraceUntil = undefined;
+      } else if (previousStatus !== "idle" || !sprite.deskGraceUntil) {
+        sprite.deskGraceUntil = now + IDLE_DESK_GRACE_MS + Math.floor(Math.random() * 2000);
+      }
+      sprite.lastStatus = normalizedStatus;
+      const inDeskGrace =
+        normalizedStatus === "idle" &&
+        Boolean(sprite.deskGraceUntil && now < sprite.deskGraceUntil);
 
       // -- Target Logic (Pathfinding) --
       const currentTile = pixelToTile(sprite.x, sprite.y);
-      const isWorking = shouldBeAtDesk(agent.status || "working");
+      const isWorking = shouldBeAtDesk(normalizedStatus) || inDeskGrace;
       const isOccupied = (tile: { row: number; col: number }) => {
         const occupant = occupiedTiles.get(nodeKey(tile.row, tile.col));
-        return occupant && occupant !== agent.id;
+        return Boolean(occupant && occupant !== agent.id);
+      };
+      const crowdScore = (tile: { row: number; col: number }) => {
+        let score = 0;
+        for (let dr = -2; dr <= 2; dr += 1) {
+          for (let dc = -2; dc <= 2; dc += 1) {
+            const row = tile.row + dr;
+            const col = tile.col + dc;
+            const key = nodeKey(row, col);
+            const distance = Math.abs(dr) + Math.abs(dc);
+            const weight = distance <= 1 ? 1.5 : distance <= 2 ? 1 : 0.5;
+            if (occupiedTiles.has(key)) {
+              score += weight;
+            }
+            if (reservedIdleTargets.has(key)) {
+              score += weight * 1.4;
+            }
+          }
+        }
+        return score;
       };
       let workTarget = sprite.homeTile;
       const workCandidates = collisionMap?.workCenters?.length
@@ -1024,11 +1278,19 @@ const SceneLayer = ({
         });
         workTarget = best || bestAny || sprite.homeTile;
       }
-      const wanderTarget = getRandomWalkable(false);
+      const wanderTarget = pickIdleSlackTarget(
+        currentTile,
+        sprite.homeTile,
+        isOccupied,
+        reservedIdleTargets,
+        crowdScore
+      );
       let desiredKind: "work" | "wander" = isWorking ? "work" : "wander";
       let desiredTile = isWorking ? workTarget : wanderTarget;
+      if (!isWorking) {
+        reservedIdleTargets.add(nodeKey(desiredTile.row, desiredTile.col));
+      }
 
-      const now = Date.now();
       const distance = Math.hypot(sprite.targetX - sprite.x, sprite.targetY - sprite.y);
       const reachedTarget = distance < 0.6;
       const idlePauseActive = sprite.idlePauseUntil && now < sprite.idlePauseUntil;
@@ -1156,9 +1418,27 @@ const SceneLayer = ({
         }
 
         // ... Existing Move Logic ...
-        if (collisionMap && !isWalkable(nextTile.col, nextTile.row)) {
-          canMove = false;
+      if (collisionMap && !isWalkable(nextTile.col, nextTile.row)) {
+        canMove = false;
+      }
+
+      if (collisionMap && canMove && !isWorking) {
+        for (let dr = -1; dr <= 1 && canMove; dr += 1) {
+          for (let dc = -1; dc <= 1; dc += 1) {
+            const rr = nextTile.row + dr;
+            const cc = nextTile.col + dc;
+            if (rr < 0 || cc < 0 || rr >= collisionMap.rows || cc >= collisionMap.cols) {
+              canMove = false;
+              break;
+            }
+            const state = collisionMap.grid[rr][cc];
+            if (state <= 0 || state === 2) {
+              canMove = false;
+              break;
+            }
+          }
         }
+      }
 
         if (canMove) {
           sprite.x = smoothX;
@@ -1193,7 +1473,7 @@ const SceneLayer = ({
           sprite.direction = "front";
         }
       } else if (distance < 0.2) {
-        if (shouldBeAtDesk(agent.status || "working")) {
+        if (isWorking) {
           sprite.direction = "back";
         } else {
           sprite.direction = "front";
@@ -1259,6 +1539,12 @@ const SceneLayer = ({
       if (!sprite.exiting || agentIds.has(id)) {
         continue;
       }
+      if (!sprite.exitAt) {
+        sprite.exitAt = Date.now();
+      }
+      if (!sprite.removeAt) {
+        sprite.removeAt = sprite.exitAt + EXIT_TTL_MS;
+      }
       const targetTile = collisionMap
         ? pickExitTarget(pixelToTile(sprite.x, sprite.y), collisionMap.exitNodes, collisionMap.grid)
         : exitNode;
@@ -1277,12 +1563,13 @@ const SceneLayer = ({
         sprite.targetX = px.x;
         sprite.targetY = px.y;
       } else {
-        sprite.targetX = baseTarget.x;
-        sprite.targetY = baseTarget.y;
+        sprite.targetX = exitTarget.x;
+        sprite.targetY = exitTarget.y;
       }
       const dx = sprite.targetX - sprite.x;
       const dy = sprite.targetY - sprite.y;
       const distance = Math.hypot(dx, dy);
+      const exitDistance = Math.hypot(exitTarget.x - sprite.x, exitTarget.y - sprite.y);
       const step = Math.min(0.85, distance);
       if (distance > 0.1) {
         const nextX = sprite.x + (dx / distance) * step;
@@ -1294,9 +1581,6 @@ const SceneLayer = ({
         }
       }
       sprite.direction = dy > 0 ? "front" : "back";
-      if (!sprite.exitAt) {
-        sprite.exitAt = Date.now();
-      }
       if (distance < 0.2 && !sprite.goodbyeUntil && (!sprite.path || sprite.path.length === 0)) {
         const now = Date.now();
         sprite.goodbyeUntil = now + GOODBYE_TTL_MS;
@@ -1310,10 +1594,24 @@ const SceneLayer = ({
           sprite.pathIndex = undefined;
         }
       }
+      const exitExpired = Boolean(sprite.removeAt && Date.now() > sprite.removeAt);
+      const hardExpiry = Boolean(sprite.exitAt && Date.now() - sprite.exitAt > EXIT_TTL_MS * 4);
+      if (hardExpiry && !sprite.goodbyeUntil) {
+        const now = Date.now();
+        sprite.x = exitTarget.x;
+        sprite.y = exitTarget.y;
+        sprite.targetX = exitTarget.x;
+        sprite.targetY = exitTarget.y;
+        sprite.path = [];
+        sprite.pathIndex = undefined;
+        sprite.goodbyeUntil = now + Math.min(GOODBYE_TTL_MS, 800);
+        sprite.removeAt = sprite.goodbyeUntil;
+      }
       if (
-        distance < 1 &&
-        (!sprite.goodbyeUntil || Date.now() > sprite.goodbyeUntil) &&
-        (sprite.removeAt && Date.now() > sprite.removeAt)
+        (exitDistance < 1 && exitExpired) ||
+        (distance < 1 &&
+          (!sprite.goodbyeUntil || Date.now() > sprite.goodbyeUntil) &&
+          (sprite.removeAt && Date.now() > sprite.removeAt))
       ) {
         spriteMap.delete(id);
         agentCache.delete(id);
@@ -1396,6 +1694,7 @@ const SceneLayer = ({
           if (!agent) return null;
           const sprite = spritesRef.current.get(agent.id);
           if (!sprite) return null;
+          const isLiveAgent = agents.some((a) => a.id === agent.id);
 
           const x = sprite.x - 8;
           const y = sprite.y - 12;
@@ -1536,9 +1835,9 @@ const SceneLayer = ({
           return (
             <Container
               key={agent.id}
-              eventMode="static"
-              cursor="pointer"
-              onpointerdown={() => onSelectAgent(agent.id)}
+              eventMode={isLiveAgent ? "static" : "none"}
+              cursor={isLiveAgent ? "pointer" : undefined}
+              onpointerdown={isLiveAgent ? () => onSelectAgent(agent.id) : undefined}
             >
               <Graphics
                 draw={(graphics: PixiGraphics) => {

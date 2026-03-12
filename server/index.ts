@@ -99,6 +99,8 @@ const DESK_COLUMNS = 5;
 const IDLE_TTL_MS = 6000;
 const AGENT_STALE_TTL_MS = 3 * 60 * 1000;
 const SESSION_STALE_TTL_MS = 10 * 60 * 1000;
+const MAINTENANCE_INTERVAL_MS = 5000;
+const BACKGROUND_IDLE_RETIRE_MS = 60 * 1000;
 
 const KNOWN_EVENTS = new Set([
   "command.executed",
@@ -369,16 +371,45 @@ const isSessionOnlyOrPartEvent = (event: EventPayload) => {
 const resolveAgentIdsForEvent = (event: EventPayload) => {
   const props = event?.properties || {};
   const info = props.info || {};
+  const eventType = getEventType(event);
   const sessionId = extractSessionId(event);
   const agentName = safeString(info.agent ?? "", "");
-  if (!sessionId) {
+
+  const candidateSessionIds = new Set<string>();
+  if (sessionId) {
+    candidateSessionIds.add(sessionId);
+  }
+  if (eventType === "session.idle" || eventType === "session.status") {
+    const parentSessionId = safeString(props.parentSessionId ?? "", "");
+    const infoSessionId = safeString(info.sessionID ?? "", "");
+    const subagentSessionId = safeString(props.subagentSessionID ?? "", "");
+    const subagentId = safeString(props.subagentID ?? "", "");
+    [parentSessionId, infoSessionId, subagentSessionId, subagentId]
+      .filter(Boolean)
+      .forEach((id) => candidateSessionIds.add(id));
+  }
+
+  if (candidateSessionIds.size === 0) {
     const direct = extractAgentId(event);
     return direct ? [direct] : [];
   }
 
-  const matches = Array.from(officeState.agents.keys()).filter((key) =>
-    key.startsWith(`${sessionId}:`)
-  );
+  const matches = Array.from(officeState.agents.keys()).filter((key) => {
+    for (const id of candidateSessionIds) {
+      if (key.startsWith(`${id}:`) || key === id) {
+        return true;
+      }
+    }
+    return false;
+  });
+
+  if (matches.length > 0 && agentName) {
+    const narrowedMatches = matches.filter((key) => key.endsWith(`:${agentName}`));
+    if (narrowedMatches.length > 0) {
+      return narrowedMatches;
+    }
+  }
+
   if (matches.length > 0) {
     return matches;
   }
@@ -495,7 +526,13 @@ const getAlias = (agentId: string, preferredName: string) => {
 
 const mapStatusFromEvent = (event: EventPayload) => {
   const type = getEventType(event);
-  const status = safeString(event?.properties?.status ?? "", "").toLowerCase();
+  const rawStatus = event?.properties?.status;
+  const status = safeString(
+    typeof rawStatus === "string"
+      ? rawStatus
+      : (rawStatus as { type?: unknown } | undefined)?.type ?? "",
+    ""
+  ).toLowerCase();
 
   if (status) {
     return status;
@@ -519,12 +556,12 @@ const mapStatusFromEvent = (event: EventPayload) => {
     return "idle";
   }
   if (type === "session.status") {
-    return "working";
+    return "";
   }
   if (type === "session.compacted") {
     return "planning";
   }
-  return "working";
+  return "";
 };
 
 const extractParentId = (event: EventPayload) => {
@@ -622,11 +659,43 @@ const extractSessionTitle = (event: EventPayload) => {
   return safeString(info.title ?? "", "");
 };
 
-const isBackgroundSession = (title: string) =>
-  Boolean(title) &&
-  (title.toLowerCase().includes("subagent") ||
-    title.toLowerCase().includes("looker") ||
-    title.toLowerCase().includes("multimodal"));
+const BACKGROUND_HINTS = [
+  "subagent",
+  "explore",
+  "librarian",
+  "oracle",
+  "metis",
+  "momus",
+  "looker",
+  "multimodal",
+  "worker",
+  "task",
+  "delegate",
+  "child",
+  "background",
+];
+
+const hasBackgroundHint = (value: string) => {
+  const normalized = safeString(value, "").toLowerCase();
+  return Boolean(normalized) && BACKGROUND_HINTS.some((hint) => normalized.includes(hint));
+};
+
+const isBackgroundSession = (title: string) => hasBackgroundHint(title);
+
+const isBackgroundAgent = (
+  sessionTitle: string,
+  agentId: string,
+  parentSessionId: string,
+  sessionId: string
+) => {
+  if (isBackgroundSession(sessionTitle) || hasBackgroundHint(agentId)) {
+    return true;
+  }
+  if (parentSessionId && sessionId && parentSessionId !== sessionId) {
+    return true;
+  }
+  return false;
+};
 
 const removeAgentReferences = (agentId: string) => {
   officeState.agents.delete(agentId);
@@ -641,15 +710,19 @@ const removeAgentReferences = (agentId: string) => {
 
 const pruneAgents = () => {
   const now = Date.now();
+  const retiringAgentIds = new Set<string>();
   for (const [key, agent] of officeState.agents.entries()) {
     const lastActivity =
       agent.lastActivityAt ||
       agent.lastMessageAt ||
-      agent.lastEventAt ||
-      agent.updatedAt ||
+      agent.lastStreamingAt ||
+      agent.lastFileEditAt ||
       0;
-    if (!agent.isBackground && agent.status !== "idle" && lastActivity) {
-      if (now - lastActivity > IDLE_TTL_MS) {
+    const lastSeen = agent.lastEventAt || agent.updatedAt || lastActivity || 0;
+    const idleReference = lastActivity || lastSeen;
+    if (!agent.isBackground && agent.status !== "idle") {
+      const shouldGoIdle = !idleReference || now - idleReference > IDLE_TTL_MS;
+      if (shouldGoIdle) {
         officeState.agents.set(key, {
           ...agent,
           status: "idle",
@@ -670,23 +743,28 @@ const pruneAgents = () => {
         updatedAt: now,
       });
     }
-    if (
-      agent.isBackground &&
-      agent.status === "idle" &&
-      now - agent.updatedAt > 3000
-    ) {
-      removeAgentReferences(key);
-      continue;
+    if (agent.isBackground && agent.status === "idle") {
+      const backgroundIdleReference =
+        lastActivity ||
+        agent.createdAt ||
+        0;
+      if (backgroundIdleReference && now - backgroundIdleReference > BACKGROUND_IDLE_RETIRE_MS) {
+        retiringAgentIds.add(key);
+      }
     }
     if (
       !agent.isBackground &&
       agent.status === "idle" &&
-      lastActivity &&
-      now - lastActivity > AGENT_STALE_TTL_MS
+      lastSeen &&
+      now - lastSeen > AGENT_STALE_TTL_MS
     ) {
-      removeAgentReferences(key);
+      retiringAgentIds.add(key);
     }
   }
+
+  retiringAgentIds.forEach((agentId) => {
+    removeAgentReferences(agentId);
+  });
 };
 
 const pruneSessions = () => {
@@ -780,7 +858,10 @@ const upsertAgentFromEvent = (event: EventPayload) => {
     const nextProvider = provider || existing?.provider || "";
     const nextSessionId = rawSessionId || existing?.sessionId || "";
     const nextSessionTitle = sessionTitle || existing?.sessionTitle || "";
-    const nextIsBackground = isBackgroundSession(nextSessionTitle);
+    const parentSessionId = safeString(props.parentSessionId ?? "", "");
+    const nextIsBackground =
+      Boolean(existing?.isBackground) ||
+      isBackgroundAgent(nextSessionTitle, agentId, parentSessionId, nextSessionId);
 
     const nextMessageSnippet = isUserMessage
       ? existing?.lastMessageSnippet || ""
@@ -797,7 +878,7 @@ const upsertAgentFromEvent = (event: EventPayload) => {
     const isActivityEvent =
       eventType === "tool.execute.before" ||
       isFileEditEvent ||
-      isPartUpdate ||
+      (isPartUpdate && hasMessageUpdate) ||
       (eventType === "message.updated" && hasMessageUpdate);
     const nextMessageAt = hasMessageUpdate
       ? now
@@ -808,10 +889,11 @@ const upsertAgentFromEvent = (event: EventPayload) => {
     const nextActivityAt = isActivityEvent
       ? now
       : existing?.lastActivityAt || 0;
+    const resolvedStatus = status || existing?.status || "idle";
     const nextStatus =
       existing?.status === "idle" && !isActivityEvent && status !== "error"
         ? "idle"
-        : status;
+        : resolvedStatus;
 
     if (existing) {
       officeState.agents.set(agentId, {
@@ -835,6 +917,7 @@ const upsertAgentFromEvent = (event: EventPayload) => {
         lastDiffAt: eventType === "session.diff" ? Date.now() : existing.lastDiffAt,
         lastFileEdited: props.file || existing.lastFileEdited || "",
         lastFileEditAt: isFileEditEvent ? Date.now() : existing.lastFileEditAt,
+        createdAt: existing.createdAt || existing.updatedAt || now,
         updatedAt,
       });
     } else {
@@ -847,7 +930,7 @@ const upsertAgentFromEvent = (event: EventPayload) => {
         sessionId: nextSessionId,
         sessionTitle: nextSessionTitle,
         isBackground: nextIsBackground,
-        status,
+        status: status || "idle",
         source: eventSource,
         lastEventType: event?.type || "unknown",
         lastMessageSnippet: trimmedSnippet,
@@ -859,6 +942,7 @@ const upsertAgentFromEvent = (event: EventPayload) => {
         lastDiffAt: eventType === "session.diff" ? Date.now() : 0,
         lastFileEdited: props.file || "",
         lastFileEditAt: isFileEditEvent ? Date.now() : 0,
+        createdAt: now,
         updatedAt,
         desk: assignDesk(),
       });
@@ -912,6 +996,14 @@ const broadcast = (payload: unknown) => {
       client.send(data);
     }
   }
+};
+
+const runMaintenance = () => {
+  if (wss.clients.size === 0) {
+    return;
+  }
+  const state = getStateSnapshot();
+  broadcast({ type: "state", state });
 };
 
 app.post("/events", (req: any, res: any) => {
@@ -998,6 +1090,8 @@ app.get("/health", (_req: any, res: any) => {
 wss.on("connection", (socket: any) => {
   socket.send(JSON.stringify({ type: "state", state: getStateSnapshot() }));
 });
+
+setInterval(runMaintenance, MAINTENANCE_INTERVAL_MS);
 
 const getLocalIp = () => {
   const nets = os.networkInterfaces();
