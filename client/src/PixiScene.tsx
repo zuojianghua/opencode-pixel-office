@@ -48,12 +48,15 @@ type SpriteState = {
   deskGraceUntil?: number;
   lastStatus?: string;
   workLockUntil?: number;
+  wanderFailCount?: number;
   lastMoveAt?: number;
   lastPosX?: number;
   lastPosY?: number;
   direction: "front" | "back" | "left" | "right";
   exiting?: boolean;
   exitAt?: number;
+  preFarewellUntil?: number;
+  farewellText?: string;
   goodbyeUntil?: number;
   removeAt?: number;
 };
@@ -179,7 +182,9 @@ const EVENT_BADGE_COLORS: Record<string, number> = {
 };
 const EXIT_TTL_MS = 2600;
 const GOODBYE_TTL_MS = 1400;
+const PRE_EXIT_FAREWELL_MS = 1200;
 const IDLE_DESK_GRACE_MS = 7000;
+const FAREWELL_TEXTS = ["再见", "我先溜了", "下班了"];
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(Math.max(value, min), max);
@@ -200,8 +205,8 @@ const pickNode = (id: string, nodes: { row: number; col: number }[], fallback: {
 };
 
 const nodeKey = (row: number, col: number) => `${row},${col}`;
-const EXIT_OFFSET_X = 12;
-const EXIT_OFFSET_Y = -4;
+const EXIT_OFFSET_X = 0;
+const EXIT_OFFSET_Y = 0;
 const EXIT_RADIUS = 5;
 
 const pickExitTarget = (
@@ -213,19 +218,40 @@ const pickExitTarget = (
     row >= 0 && col >= 0 && row < grid.length && col < grid[0].length;
   const isWalkable = (row: number, col: number) => grid[row][col] > 0;
 
+  const exactExit = exitNodes.find((node) => {
+    if (!isWalkable(node.row, node.col)) {
+      return false;
+    }
+
+    if (node.row === current.row && node.col === current.col) {
+      return true;
+    }
+
+    return findPath(grid, current, node).length > 0;
+  });
+  if (exactExit) {
+    return exactExit;
+  }
+
   let best = exitNodes[0] || current;
-  let bestDist = Number.POSITIVE_INFINITY;
+  let bestDoorDist = Number.POSITIVE_INFINITY;
+  let bestCurrentDist = Number.POSITIVE_INFINITY;
 
   exitNodes.forEach((node) => {
-    for (let dr = -EXIT_RADIUS; dr <= EXIT_RADIUS; dr += 1) {
-      for (let dc = -EXIT_RADIUS; dc <= EXIT_RADIUS; dc += 1) {
+    for (let dr = -2; dr <= 2; dr += 1) {
+      for (let dc = -2; dc <= 2; dc += 1) {
         const row = node.row + dr;
         const col = node.col + dc;
         if (!inBounds(row, col)) continue;
         if (!isWalkable(row, col)) continue;
-        const dist = Math.abs(row - current.row) + Math.abs(col - current.col);
-        if (dist < bestDist) {
-          bestDist = dist;
+        const doorDist = Math.abs(row - node.row) + Math.abs(col - node.col);
+        const currentDist = Math.abs(row - current.row) + Math.abs(col - current.col);
+        if (
+          doorDist < bestDoorDist ||
+          (doorDist === bestDoorDist && currentDist < bestCurrentDist)
+        ) {
+          bestDoorDist = doorDist;
+          bestCurrentDist = currentDist;
           best = { row, col };
         }
       }
@@ -233,6 +259,22 @@ const pickExitTarget = (
   });
 
   return best;
+};
+
+const pickMainExitNode = (
+  doorNodes: { row: number; col: number }[],
+  exitNodes: { row: number; col: number }[],
+  fallback: { row: number; col: number }
+) => {
+  const base = doorNodes.length > 0 ? doorNodes : exitNodes;
+  if (!base.length) {
+    return fallback;
+  }
+  return base.reduce((best, current) => {
+    if (current.row > best.row) return current;
+    if (current.row === best.row && current.col < best.col) return current;
+    return best;
+  }, base[0]);
 };
 
 const simplifyPath = (path: { row: number; col: number }[]) => {
@@ -685,7 +727,11 @@ const SceneLayer = ({
       return getRandomWalkable(false);
     }
 
-    const hasWalkableClearance = (tile: { row: number; col: number }, radius: number) => {
+    const hasWalkableClearance = (
+      tile: { row: number; col: number },
+      radius: number,
+      allowWorkTiles: boolean
+    ) => {
       for (let dr = -radius; dr <= radius; dr += 1) {
         for (let dc = -radius; dc <= radius; dc += 1) {
           const row = tile.row + dr;
@@ -697,6 +743,9 @@ const SceneLayer = ({
           if (state <= 0) {
             return false;
           }
+          if (!allowWorkTiles && state === 2) {
+            return false;
+          }
         }
       }
       return true;
@@ -705,7 +754,7 @@ const SceneLayer = ({
     const isBlockedTarget = (tile: { row: number; col: number }) =>
       isOccupied(tile) ||
       reservedTargets.has(nodeKey(tile.row, tile.col)) ||
-      !hasWalkableClearance(tile, 1);
+      !hasWalkableClearance(tile, 1, false);
 
     const slackPool = collisionMap.slackNodes.filter((node) => !isBlockedTarget(node));
     const transitPool = collisionMap.transitNodes.filter((node) => !isBlockedTarget(node));
@@ -1138,7 +1187,9 @@ const SceneLayer = ({
     const agentCache = agentCacheRef.current;
     const now = Date.now();
     const ids = new Set(agents.map((agent) => agent.id));
-    const exitNode = collisionMap?.exitNodes?.[0] ?? doorTile();
+    const exitNode = collisionMap
+      ? pickMainExitNode(collisionMap.doorNodes, collisionMap.exitNodes, doorTile())
+      : doorTile();
     agents.forEach((agent) => {
       agentCache.set(agent.id, agent);
     });
@@ -1147,14 +1198,18 @@ const SceneLayer = ({
         const existing = spriteMap.get(id);
         if (existing && !existing.exiting) {
           const targetTile = collisionMap
-            ? pickExitTarget(pixelToTile(existing.x, existing.y), collisionMap.exitNodes, collisionMap.grid)
+            ? pickExitTarget(pixelToTile(existing.x, existing.y), [exitNode], collisionMap.grid)
             : exitNode;
           const baseTarget = tileToPixel(targetTile);
           const exitTarget = { x: baseTarget.x + EXIT_OFFSET_X, y: baseTarget.y + EXIT_OFFSET_Y };
+          const farewellAt = now + PRE_EXIT_FAREWELL_MS;
+          const farewellText = FAREWELL_TEXTS[hashId(id) % FAREWELL_TEXTS.length];
           spriteMap.set(id, {
             ...existing,
             exiting: true,
             exitAt: now,
+            preFarewellUntil: farewellAt,
+            farewellText,
             goodbyeUntil: undefined,
             removeAt: undefined,
             targetX: exitTarget.x,
@@ -1188,6 +1243,9 @@ const SceneLayer = ({
         targetY: position.y,
         homeTile: { row: homeTile.row, col: homeTile.col },
         direction: "front",
+        lastMoveAt: now,
+        lastPosX: position.x,
+        lastPosY: position.y,
       });
     });
   }, [agents, collisionMap]); // Re-run when collision map loads
@@ -1288,42 +1346,45 @@ const SceneLayer = ({
         reservedIdleTargets.add(nodeKey(desiredTile.row, desiredTile.col));
       }
 
-      const distance = Math.hypot(sprite.targetX - sprite.x, sprite.targetY - sprite.y);
-      const reachedTarget = distance < 0.6;
+      const plannedDistance = Math.hypot(sprite.targetX - sprite.x, sprite.targetY - sprite.y);
+      const reachedTarget = plannedDistance < 0.6;
       const idlePauseActive = sprite.idlePauseUntil && now < sprite.idlePauseUntil;
 
       if (!isWorking) {
         if (idlePauseActive) {
           sprite.targetX = sprite.x;
           sprite.targetY = sprite.y;
-          return;
-        }
-        if (sprite.idlePauseUntil && now >= sprite.idlePauseUntil) {
-          sprite.idlePauseUntil = undefined;
-          sprite.wanderUntil = now + 3000 + Math.floor(Math.random() * 2000);
-          sprite.path = [];
-          sprite.pathIndex = undefined;
-          sprite.targetTile = undefined;
-          sprite.targetKind = undefined;
-          sprite.retargetAt = 0;
-        }
-        if (!sprite.wanderUntil) {
-          sprite.idlePauseUntil = now + 2000;
-          sprite.path = [];
-          sprite.pathIndex = undefined;
-          sprite.targetTile = undefined;
-          sprite.targetKind = undefined;
-          sprite.retargetAt = 0;
+          // Don't return — still need to handle path advancement and direction,
+          // but skip target selection and movement
+        } else {
+          if (sprite.idlePauseUntil && now >= sprite.idlePauseUntil) {
+            sprite.idlePauseUntil = undefined;
+            sprite.wanderUntil = now + 3000 + Math.floor(Math.random() * 2000);
+            sprite.path = [];
+            sprite.pathIndex = undefined;
+            sprite.targetTile = undefined;
+            sprite.targetKind = undefined;
+            sprite.retargetAt = 0;
+            sprite.wanderFailCount = 0;
+          }
+          if (!sprite.wanderUntil) {
+            sprite.idlePauseUntil = now + 2000;
+            sprite.path = [];
+            sprite.pathIndex = undefined;
+            sprite.targetTile = undefined;
+            sprite.targetKind = undefined;
+            sprite.retargetAt = 0;
+          }
         }
       }
 
       const workLocked = sprite.workLockUntil && now < sprite.workLockUntil;
       const needsNewTarget =
         !sprite.targetTile ||
-        (!workLocked && sprite.targetKind !== desiredKind) ||
+        (sprite.targetKind !== desiredKind && (!workLocked || desiredKind === "wander")) ||
         (isWorking ? reachedTarget : (!sprite.wanderUntil || now > sprite.wanderUntil));
 
-      if (collisionMap && needsNewTarget && (!sprite.path || sprite.path.length === 0)) {
+      if (collisionMap && needsNewTarget) {
         sprite.targetKind = desiredKind;
         sprite.targetTile = desiredTile;
         let rawPath = findPath(collisionMap.grid, currentTile, desiredTile);
@@ -1335,13 +1396,30 @@ const SceneLayer = ({
           sprite.targetY = chairPos.y;
           sprite.path = [];
           sprite.pathIndex = undefined;
+          sprite.lastMoveAt = now;
+        } else if (
+          rawPath.length === 0 &&
+          (desiredTile.row !== currentTile.row || desiredTile.col !== currentTile.col)
+        ) {
+          // Path failed — increment fail counter and use increasing backoff
+          const failCount = (sprite.wanderFailCount || 0) + 1;
+          sprite.wanderFailCount = failCount;
+          sprite.path = [];
+          sprite.pathIndex = undefined;
+          sprite.targetTile = undefined;
+          sprite.targetKind = undefined;
+          // Increasing backoff: 500ms, 800ms, 1100ms... up to 3s
+          const backoff = Math.min(3000, 500 + (failCount - 1) * 300);
+          sprite.idlePauseUntil = now + backoff + Math.floor(Math.random() * 250);
+          sprite.wanderUntil = undefined;
+          sprite.retargetAt = 0;
         } else {
           sprite.path = simplifyPath(rawPath);
-        }
-        sprite.pathIndex = sprite.path.length > 1 ? 1 : 0;
-        sprite.retargetAt = now + 1400;
-        if (isWorking) {
-          sprite.workLockUntil = now + 2200;
+          sprite.pathIndex = sprite.path.length > 1 ? 1 : 0;
+          sprite.retargetAt = now + 1400;
+          if (isWorking) {
+            sprite.workLockUntil = now + 2200;
+          }
         }
       }
 
@@ -1358,11 +1436,37 @@ const SceneLayer = ({
         sprite.targetY = px.y;
       }
 
-      const dx = sprite.targetX - sprite.x;
-      const dy = sprite.targetY - sprite.y;
+      let dx = sprite.targetX - sprite.x;
+      let dy = sprite.targetY - sprite.y;
+      let distance = Math.hypot(dx, dy);
       const speed = statusSpeed(agent.status || "working");
 
-      if (distance > 0.1) {
+      const isStuckRoaming =
+        !isWorking &&
+        !idlePauseActive &&
+        distance > 0.35 &&
+        sprite.lastMoveAt !== undefined &&
+        now - sprite.lastMoveAt > 1600;
+
+      if (isStuckRoaming) {
+        const failCount = (sprite.wanderFailCount || 0) + 1;
+        sprite.wanderFailCount = failCount;
+        sprite.path = [];
+        sprite.pathIndex = undefined;
+        sprite.targetTile = undefined;
+        sprite.targetKind = undefined;
+        sprite.targetX = sprite.x;
+        sprite.targetY = sprite.y;
+        const backoff = Math.min(3000, 400 + (failCount - 1) * 300);
+        sprite.idlePauseUntil = now + backoff + Math.floor(Math.random() * 300);
+        sprite.wanderUntil = undefined;
+        sprite.retargetAt = 0;
+        dx = 0;
+        dy = 0;
+        distance = 0;
+      }
+
+      if (!idlePauseActive && distance > 0.1) {
         const step = Math.min(speed, distance, 0.4);
         const nextX = sprite.x + (dx / distance) * step;
         const nextY = sprite.y + (dy / distance) * step;
@@ -1419,22 +1523,9 @@ const SceneLayer = ({
         canMove = false;
       }
 
-      if (collisionMap && canMove && !isWorking) {
-        for (let dr = -1; dr <= 1 && canMove; dr += 1) {
-          for (let dc = -1; dc <= 1; dc += 1) {
-            const rr = nextTile.row + dr;
-            const cc = nextTile.col + dc;
-            if (rr < 0 || cc < 0 || rr >= collisionMap.rows || cc >= collisionMap.cols) {
-              canMove = false;
-              break;
-            }
-            const state = collisionMap.grid[rr][cc];
-            if (state <= 0) {
-              canMove = false;
-              break;
-            }
-          }
-        }
+      const nextOccupant = occupiedTiles.get(nodeKey(nextTile.row, nextTile.col));
+      if (canMove && nextOccupant && nextOccupant !== agent.id) {
+        canMove = false;
       }
 
         if (canMove) {
@@ -1468,6 +1559,15 @@ const SceneLayer = ({
           sprite.targetX = sprite.x;
           sprite.targetY = sprite.y;
           sprite.direction = "front";
+          if (!isWorking) {
+            sprite.path = [];
+            sprite.pathIndex = undefined;
+            sprite.targetTile = undefined;
+            sprite.targetKind = undefined;
+            sprite.idlePauseUntil = now + 250 + Math.floor(Math.random() * 350);
+            sprite.wanderUntil = undefined;
+            sprite.retargetAt = 0;
+          }
         }
       } else if (distance < 0.2) {
         if (isWorking) {
@@ -1477,7 +1577,7 @@ const SceneLayer = ({
         }
       }
 
-      if (isWorking && sprite.lastMoveAt && now - sprite.lastMoveAt > 1500) {
+      if (isWorking && !inDeskGrace && sprite.lastMoveAt && now - sprite.lastMoveAt > 1500) {
         const chairPos = tileToPixel(workTarget);
         sprite.x = chairPos.x;
         sprite.y = chairPos.y;
@@ -1531,7 +1631,9 @@ const SceneLayer = ({
       });
     }
 
-    const exitNode = collisionMap?.exitNodes?.[0] ?? doorTile();
+    const exitNode = collisionMap
+      ? pickMainExitNode(collisionMap.doorNodes, collisionMap.exitNodes, doorTile())
+      : doorTile();
     for (const [id, sprite] of spriteMap.entries()) {
       if (!sprite.exiting || agentIds.has(id)) {
         continue;
@@ -1539,19 +1641,38 @@ const SceneLayer = ({
       if (!sprite.exitAt) {
         sprite.exitAt = Date.now();
       }
-      if (!sprite.removeAt) {
-        sprite.removeAt = sprite.exitAt + EXIT_TTL_MS;
+      if (!sprite.farewellText) {
+        sprite.farewellText = FAREWELL_TEXTS[hashId(id) % FAREWELL_TEXTS.length];
+      }
+      if (sprite.preFarewellUntil && Date.now() < sprite.preFarewellUntil) {
+        sprite.targetX = sprite.x;
+        sprite.targetY = sprite.y;
+        sprite.direction = "front";
+        continue;
+      }
+      if (sprite.preFarewellUntil && Date.now() >= sprite.preFarewellUntil) {
+        sprite.preFarewellUntil = undefined;
       }
       const targetTile = collisionMap
-        ? pickExitTarget(pixelToTile(sprite.x, sprite.y), collisionMap.exitNodes, collisionMap.grid)
+        ? pickExitTarget(pixelToTile(sprite.x, sprite.y), [exitNode], collisionMap.grid)
         : exitNode;
       const baseTarget = tileToPixel(targetTile);
       const exitTarget = { x: baseTarget.x + EXIT_OFFSET_X, y: baseTarget.y + EXIT_OFFSET_Y };
 
       if (collisionMap && (!sprite.path || sprite.path.length === 0)) {
         const currentTile = pixelToTile(sprite.x, sprite.y);
-        sprite.path = simplifyPath(findPath(collisionMap.grid, currentTile, targetTile));
-        sprite.pathIndex = sprite.path.length > 1 ? 1 : 0;
+        const rawPath = findPath(collisionMap.grid, currentTile, targetTile);
+        if (rawPath.length > 0) {
+          sprite.path = simplifyPath(rawPath);
+          sprite.pathIndex = sprite.path.length > 1 ? 1 : 0;
+        } else {
+          // Path not found — can't reach door, trigger farewell immediately
+          if (!sprite.goodbyeUntil) {
+            const now = Date.now();
+            sprite.goodbyeUntil = now + GOODBYE_TTL_MS;
+            sprite.removeAt = now + GOODBYE_TTL_MS;
+          }
+        }
       }
       if (sprite.path && sprite.path.length > 0 && sprite.pathIndex !== undefined) {
         const nextIndex = Math.min(sprite.pathIndex, sprite.path.length - 1);
@@ -1559,7 +1680,7 @@ const SceneLayer = ({
         const px = tileToPixel(nextNode);
         sprite.targetX = px.x;
         sprite.targetY = px.y;
-      } else {
+      } else if (!sprite.goodbyeUntil) {
         sprite.targetX = exitTarget.x;
         sprite.targetY = exitTarget.y;
       }
@@ -1568,17 +1689,26 @@ const SceneLayer = ({
       const distance = Math.hypot(dx, dy);
       const exitDistance = Math.hypot(exitTarget.x - sprite.x, exitTarget.y - sprite.y);
       const step = Math.min(0.85, distance);
-      if (distance > 0.1) {
+      if (!sprite.goodbyeUntil && distance > 0.1) {
         const nextX = sprite.x + (dx / distance) * step;
         const nextY = sprite.y + (dy / distance) * step;
         const nextTile = pixelToTile(nextX, nextY);
         if (!collisionMap || isWalkable(nextTile.col, nextTile.row)) {
           sprite.x = nextX;
           sprite.y = nextY;
+        } else {
+          // Hit wall — clear path to recalculate next frame
+          sprite.path = [];
+          sprite.pathIndex = undefined;
         }
       }
-      sprite.direction = dy > 0 ? "front" : "back";
-      if (distance < 0.2 && !sprite.goodbyeUntil && (!sprite.path || sprite.path.length === 0)) {
+      if (!sprite.goodbyeUntil) {
+        sprite.direction = dy > 0 ? "front" : "back";
+      }
+      const reachedDoor = exitDistance < 1;
+      const pathCompleted = !sprite.path || sprite.path.length === 0;
+      // Trigger goodbye when: reached door, or path completed and close enough
+      if ((reachedDoor || (pathCompleted && exitDistance < 8)) && !sprite.goodbyeUntil) {
         const now = Date.now();
         sprite.goodbyeUntil = now + GOODBYE_TTL_MS;
         sprite.removeAt = now + GOODBYE_TTL_MS;
@@ -1593,23 +1723,14 @@ const SceneLayer = ({
       }
       const exitExpired = Boolean(sprite.removeAt && Date.now() > sprite.removeAt);
       const hardExpiry = Boolean(sprite.exitAt && Date.now() - sprite.exitAt > EXIT_TTL_MS * 4);
+      // Hard expiry: force goodbye+remove regardless of position
       if (hardExpiry && !sprite.goodbyeUntil) {
         const now = Date.now();
-        sprite.x = exitTarget.x;
-        sprite.y = exitTarget.y;
-        sprite.targetX = exitTarget.x;
-        sprite.targetY = exitTarget.y;
-        sprite.path = [];
-        sprite.pathIndex = undefined;
-        sprite.goodbyeUntil = now + Math.min(GOODBYE_TTL_MS, 800);
-        sprite.removeAt = sprite.goodbyeUntil;
+        sprite.goodbyeUntil = now + GOODBYE_TTL_MS;
+        sprite.removeAt = now + GOODBYE_TTL_MS;
       }
-      if (
-        (exitDistance < 1 && exitExpired) ||
-        (distance < 1 &&
-          (!sprite.goodbyeUntil || Date.now() > sprite.goodbyeUntil) &&
-          (sprite.removeAt && Date.now() > sprite.removeAt))
-      ) {
+      // Remove when goodbye period expired (regardless of reachedDoor)
+      if (exitExpired) {
         spriteMap.delete(id);
         agentCache.delete(id);
       }
@@ -1735,8 +1856,11 @@ const SceneLayer = ({
             Date.now() - agent.lastStreamingAt < TYPING_TTL_MS;
           const statusText = statusBubbleText(agent.status || "working");
           const snippet = agent.lastMessageSnippet || "";
-          const showGoodbye = Boolean(sprite.goodbyeUntil && Date.now() < sprite.goodbyeUntil);
-          const goodbyeText = "再见";
+          const showGoodbye = Boolean(
+            (sprite.preFarewellUntil && Date.now() < sprite.preFarewellUntil) ||
+            (sprite.goodbyeUntil && Date.now() < sprite.goodbyeUntil)
+          );
+          const goodbyeText = sprite.farewellText || "再见";
           const messageText = showGoodbye
             ? goodbyeText
             : isStreaming
