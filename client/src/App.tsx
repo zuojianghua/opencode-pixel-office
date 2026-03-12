@@ -1,5 +1,4 @@
 import { useMemo, useState } from "react";
-import QRCode from "react-qr-code";
 import { AgentPanel } from "./components/AgentPanel";
 import { ScreenFrame } from "./components/ScreenFrame";
 import { SessionPanel } from "./components/SessionPanel";
@@ -23,12 +22,10 @@ const App = () => {
     appVersion,
     lastTodoSummary,
     bossMessage,
-    networkIp,
     setSelectedAgentId,
     setSelectedSessionId,
   } = useOfficeState();
 
-  const [showQr, setShowQr] = useState(false);
   const [activeTab, setActiveTab] = useState<OfficeTab>("opencode");
 
   // Filter agents by source
@@ -109,33 +106,8 @@ const App = () => {
         </div>
 
         <div className={`status-badge ${connected ? "live" : ""}`}>
-          <span className="text-[8px] opacity-70 mb-1">系统状态</span>
+          <span className="text-[8px] opacity-70 mb-0.5">系统状态</span>
           <span className="font-bold">{connected ? "在线" : "离线"}</span>
-          {networkIp && connected && (
-            <div className="relative mt-2 border-t border-white/20 pt-1 flex flex-col items-center">
-              <button
-                onClick={() => setShowQr(!showQr)}
-                className="text-[8px] font-normal opacity-80 hover:opacity-100 hover:text-accent cursor-pointer underline decoration-dotted"
-                title="点击扫描二维码"
-              >
-                http://{networkIp}:5100
-              </button>
-
-              {showQr && (
-                <div className="absolute top-8 right-0 bg-white p-2 border-2 border-foreground shadow-[4px_4px_0_rgba(0,0,0,0.2)] z-50">
-                  <div style={{ height: "auto", margin: "0 auto", maxWidth: 128, width: "100%" }}>
-                    <QRCode
-                      size={256}
-                      style={{ height: "auto", maxWidth: "100%", width: "100%" }}
-                      value={`http://${networkIp}:5100`}
-                      viewBox={`0 0 256 256`}
-                    />
-                  </div>
-                  <div className="text-[8px] text-center mt-1 text-foreground font-bold">扫一扫</div>
-                </div>
-              )}
-            </div>
-          )}
         </div>
       </header>
 

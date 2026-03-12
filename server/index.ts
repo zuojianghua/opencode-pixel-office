@@ -97,6 +97,8 @@ const officeState: OfficeState = {
 const MAX_DESKS = 15;
 const DESK_COLUMNS = 5;
 const IDLE_TTL_MS = 6000;
+const AGENT_STALE_TTL_MS = 3 * 60 * 1000;
+const SESSION_STALE_TTL_MS = 10 * 60 * 1000;
 
 const KNOWN_EVENTS = new Set([
   "command.executed",
@@ -456,9 +458,7 @@ const applySessionLifecycle = (event: EventPayload) => {
       officeState.sessions.delete(sessionId);
       for (const key of officeState.agents.keys()) {
         if (key.startsWith(`${sessionId}:`) || key === sessionId) {
-          officeState.agents.delete(key);
-          officeState.aliases.delete(key);
-          officeState.interactions.delete(key);
+          removeAgentReferences(key);
         }
       }
       if (officeState.activeSessionId === sessionId) {
@@ -628,10 +628,26 @@ const isBackgroundSession = (title: string) =>
     title.toLowerCase().includes("looker") ||
     title.toLowerCase().includes("multimodal"));
 
+const removeAgentReferences = (agentId: string) => {
+  officeState.agents.delete(agentId);
+  officeState.aliases.delete(agentId);
+  officeState.interactions.delete(agentId);
+  for (const [key, value] of officeState.interactions.entries()) {
+    if (value.with === agentId) {
+      officeState.interactions.delete(key);
+    }
+  }
+};
+
 const pruneAgents = () => {
   const now = Date.now();
   for (const [key, agent] of officeState.agents.entries()) {
-    const lastActivity = agent.lastActivityAt || agent.lastMessageAt || 0;
+    const lastActivity =
+      agent.lastActivityAt ||
+      agent.lastMessageAt ||
+      agent.lastEventAt ||
+      agent.updatedAt ||
+      0;
     if (!agent.isBackground && agent.status !== "idle" && lastActivity) {
       if (now - lastActivity > IDLE_TTL_MS) {
         officeState.agents.set(key, {
@@ -659,9 +675,32 @@ const pruneAgents = () => {
       agent.status === "idle" &&
       now - agent.updatedAt > 3000
     ) {
-      officeState.agents.delete(key);
-      officeState.aliases.delete(key);
-      officeState.interactions.delete(key);
+      removeAgentReferences(key);
+      continue;
+    }
+    if (
+      !agent.isBackground &&
+      agent.status === "idle" &&
+      lastActivity &&
+      now - lastActivity > AGENT_STALE_TTL_MS
+    ) {
+      removeAgentReferences(key);
+    }
+  }
+};
+
+const pruneSessions = () => {
+  const now = Date.now();
+  for (const [sessionId, session] of officeState.sessions.entries()) {
+    const hasLinkedAgent = Array.from(officeState.agents.values()).some(
+      (agent) => agent.sessionId === sessionId
+    );
+    const age = now - (session.updatedAt || 0);
+    if (!hasLinkedAgent && age > SESSION_STALE_TTL_MS) {
+      officeState.sessions.delete(sessionId);
+      if (officeState.activeSessionId === sessionId) {
+        officeState.activeSessionId = null;
+      }
     }
   }
 };
@@ -843,6 +882,7 @@ const updateBossMessage = (event: EventPayload) => {
 const getStateSnapshot = () => {
   pruneInteractions();
   pruneAgents();
+  pruneSessions();
   return {
     agents: Array.from(officeState.agents.values()),
     sessions: Array.from(officeState.sessions.values()).sort(

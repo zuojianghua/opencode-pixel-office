@@ -363,19 +363,37 @@ const wrapLines = (
   if (!text) {
     return [""];
   }
-  const words = text.split(/\s+/);
+  const chars = Array.from(text);
   const lines: string[] = [];
   let current = "";
 
-  words.forEach((word) => {
-    const next = current ? `${current} ${word}` : word;
-    if (TextMetrics.measureText(next, style).width <= maxWidth) {
-      current = next;
-    } else {
+  chars.forEach((char) => {
+    if (char === "\n") {
       if (current) {
         lines.push(current);
+        current = "";
       }
-      current = word;
+      return;
+    }
+    if (!current && /\s/.test(char)) {
+      return;
+    }
+    const next = `${current}${char}`;
+    if (TextMetrics.measureText(next, style).width <= maxWidth) {
+      current = next;
+      return;
+    }
+
+    if (current) {
+      lines.push(current);
+      current = "";
+    }
+
+    if (!/\s/.test(char)) {
+      const charWidth = TextMetrics.measureText(char, style).width;
+      if (charWidth <= maxWidth) {
+        current = char;
+      }
     }
   });
 
@@ -1597,12 +1615,14 @@ const SceneLayer = ({
                   if (showTodoPulse && agent.id === todoTargetId) {
                     const badgeX = aliasX + aliasWidth + 6;
                     const badgeY = labelY - 12;
+                    const badgeOuterSize = 10;
+                    const badgeInnerSize = 4;
                     graphics.beginFill(0xf7f0d4);
                     graphics.lineStyle(2, 0x4a5f66, 1);
-                    graphics.drawRoundedRect(badgeX, badgeY + 4, 14, 14, 3);
+                    graphics.drawRoundedRect(badgeX, badgeY + 4, badgeOuterSize, badgeOuterSize, 2);
                     graphics.endFill();
                     graphics.beginFill(0x4a5f66);
-                    graphics.drawRect(badgeX + 4, badgeY, 6, 6);
+                    graphics.drawRect(badgeX + 3, badgeY + 7, badgeInnerSize, badgeInnerSize);
                     graphics.endFill();
                     graphics.lineStyle(0, 0, 0);
                   }
