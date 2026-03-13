@@ -4,8 +4,6 @@ A pixel-art office visualization for AI coding assistants. Works with both **Ope
 
 <img width="1455" height="824" alt="Pixel Office Screenshot" src="https://github.com/user-attachments/assets/e20e2e68-a032-4747-a027-aacca0f274e5" />
 
-[![npm version](https://img.shields.io/npm/v/opencode-pixel-office.svg)](https://www.npmjs.com/package/opencode-pixel-office)
-
 ## Features
 
 - **Dual Support**: Works with both OpenCode and Claude Code CLI
@@ -17,14 +15,16 @@ A pixel-art office visualization for AI coding assistants. Works with both **Ope
 ## Quick Start
 
 ```bash
-# Install globally
-npm install -g opencode-pixel-office
+# Clone your fork
+git clone <your-fork-url>
+cd opencode-pixel-office
+npm install
 
-# Install for both OpenCode and Claude Code
-opencode-pixel-office install
+# Install plugin + hooks for both OpenCode and Claude Code
+npx opencode-pixel-office install
 
 # Start the server
-opencode-pixel-office start
+npx opencode-pixel-office start
 ```
 
 That's it! The dashboard opens at `http://localhost:5100`.
@@ -86,7 +86,7 @@ Monitor your agents from your phone!
 
 ```bash
 # Clone the repo
-git clone https://github.com/anthropics/opencode-pixel-office.git
+git clone <your-fork-url>
 cd opencode-pixel-office
 npm install
 

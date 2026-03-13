@@ -7,9 +7,6 @@ const neighbors = (node: GridNode) => [
   { row: node.row, col: node.col - 1 },
 ];
 
-const manhattan = (a: GridNode, b: GridNode) =>
-  Math.abs(a.row - b.row) + Math.abs(a.col - b.col);
-
 const key = (node: GridNode) => `${node.row},${node.col}`;
 
 const findPath = (grid: number[][], start: GridNode, end: GridNode) => {
@@ -19,31 +16,31 @@ const findPath = (grid: number[][], start: GridNode, end: GridNode) => {
     node.row >= 0 && node.col >= 0 && node.row < rows && node.col < cols;
   const isWalkable = (node: GridNode) => grid[node.row][node.col] > 0;
 
-  const open = new Set<string>([key(start)]);
+  if (!inBounds(start) || !inBounds(end)) {
+    return [] as GridNode[];
+  }
+  if (!isWalkable(start) || !isWalkable(end)) {
+    return [] as GridNode[];
+  }
+  if (start.row === end.row && start.col === end.col) {
+    return [start];
+  }
+
+  const startKey = key(start);
+  const endKey = key(end);
+  const queue: GridNode[] = [start];
+  let head = 0;
+  const visited = new Set<string>([startKey]);
   const cameFrom = new Map<string, string>();
-  const gScore = new Map<string, number>([[key(start), 0]]);
-  const fScore = new Map<string, number>([[key(start), manhattan(start, end)]]);
 
-  const lowestScore = (): string | null => {
-    let best: string | null = null;
-    let bestValue = Number.POSITIVE_INFINITY;
-    open.forEach((nodeKey) => {
-      const score = fScore.get(nodeKey) ?? Number.POSITIVE_INFINITY;
-      if (score < bestValue) {
-        bestValue = score;
-        best = nodeKey;
-      }
-    });
-    return best;
-  };
+  while (head < queue.length) {
+    const current = queue[head];
+    head += 1;
+    const currentKey = key(current);
 
-  while (open.size > 0) {
-    const currentKey = lowestScore();
-    if (currentKey === null) break;
-    const [r, c] = currentKey.split(",").map(Number);
-    if (r === end.row && c === end.col) {
+    if (currentKey === endKey) {
       const path: GridNode[] = [];
-      let cursor: string | undefined = currentKey;
+      let cursor: string | undefined = endKey;
       while (cursor) {
         const [cr, cc] = cursor.split(",").map(Number);
         path.push({ row: cr, col: cc });
@@ -52,19 +49,18 @@ const findPath = (grid: number[][], start: GridNode, end: GridNode) => {
       return path.reverse();
     }
 
-    open.delete(currentKey);
-    neighbors({ row: r, col: c }).forEach((next) => {
-      if (!inBounds(next)) return;
-      if (!isWalkable(next)) return;
-      const nextKey = key(next);
-      const tentative = (gScore.get(currentKey) ?? Number.POSITIVE_INFINITY) + 1;
-      if (tentative < (gScore.get(nextKey) ?? Number.POSITIVE_INFINITY)) {
-        cameFrom.set(nextKey, currentKey);
-        gScore.set(nextKey, tentative);
-        fScore.set(nextKey, tentative + manhattan(next, end));
-        open.add(nextKey);
+    for (const next of neighbors(current)) {
+      if (!inBounds(next) || !isWalkable(next)) {
+        continue;
       }
-    });
+      const nextKey = key(next);
+      if (visited.has(nextKey)) {
+        continue;
+      }
+      visited.add(nextKey);
+      cameFrom.set(nextKey, currentKey);
+      queue.push(next);
+    }
   }
 
   return [] as GridNode[];
