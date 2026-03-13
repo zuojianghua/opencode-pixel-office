@@ -776,7 +776,6 @@ const SceneLayer = ({
   useTick((delta: number) => {
     runAgentSimulation({
       delta,
-      tileSize: TILE,
       agents,
       collisionMap,
       spritesRef,
@@ -795,8 +794,6 @@ const SceneLayer = ({
       doorTile,
       setTileMap,
       triggerFrame: () => setFrame((current) => current + 1),
-      defaultRows: DEFAULT_MAP_ROWS,
-      defaultCols: DEFAULT_MAP_COLS,
       idleDeskGraceMs: IDLE_DESK_GRACE_MS,
       goodbyeTtlMs: GOODBYE_TTL_MS,
       exitTtlMs: EXIT_TTL_MS,

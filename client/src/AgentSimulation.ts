@@ -21,7 +21,6 @@ type Tile = { row: number; col: number };
 
 type RunAgentSimulationArgs = {
   delta: number;
-  tileSize: number;
   agents: Agent[];
   collisionMap: CollisionMapData | null;
   spritesRef: MutableRefObject<Map<string, SpriteState>>;
@@ -40,8 +39,6 @@ type RunAgentSimulationArgs = {
   doorTile: () => Tile;
   setTileMap: Dispatch<SetStateAction<string[][]>>;
   triggerFrame: () => void;
-  defaultRows: number;
-  defaultCols: number;
   idleDeskGraceMs: number;
   goodbyeTtlMs: number;
   exitTtlMs: number;
@@ -53,7 +50,6 @@ type RunAgentSimulationArgs = {
 
 export const runAgentSimulation = ({
   delta,
-  tileSize,
   agents,
   collisionMap,
   spritesRef,
@@ -72,8 +68,6 @@ export const runAgentSimulation = ({
   doorTile,
   setTileMap,
   triggerFrame,
-  defaultRows,
-  defaultCols,
   idleDeskGraceMs,
   goodbyeTtlMs,
   exitTtlMs,
@@ -89,6 +83,63 @@ export const runAgentSimulation = ({
   const agentIds = new Set(agents.map((agent) => agent.id));
   const occupiedTiles = new Map<string, string>();
   const reservedIdleTargets = new Set<string>();
+  const doorClusters = new Map<string, string[]>();
+
+  if (doorNodesSetRef.current.size > 0) {
+    const remaining = new Set(doorNodesSetRef.current);
+    const offsets = [
+      { row: 1, col: 0 },
+      { row: -1, col: 0 },
+      { row: 0, col: 1 },
+      { row: 0, col: -1 },
+    ];
+
+    while (remaining.size > 0) {
+      const start = remaining.values().next().value;
+      if (!start) {
+        break;
+      }
+      remaining.delete(start);
+      const cluster: string[] = [start];
+      const stack = [start];
+
+      while (stack.length > 0) {
+        const current = stack.pop();
+        if (!current) {
+          continue;
+        }
+        const [row, col] = current.split(",").map(Number);
+        if (Number.isNaN(row) || Number.isNaN(col)) {
+          continue;
+        }
+
+        offsets.forEach((offset) => {
+          const neighborKey = nodeKey(row + offset.row, col + offset.col);
+          if (!remaining.has(neighborKey)) {
+            return;
+          }
+          remaining.delete(neighborKey);
+          cluster.push(neighborKey);
+          stack.push(neighborKey);
+        });
+      }
+
+      cluster.forEach((key) => {
+        doorClusters.set(key, cluster);
+      });
+    }
+  }
+
+  const openDoorCluster = (doorKey: string, openAt: number) => {
+    const cluster = doorClusters.get(doorKey) || [doorKey];
+    cluster.forEach((key) => {
+      if (doorStateRef.current.get(key) !== "door_open") {
+        doorStateRef.current.set(key, "door_open");
+        doorDirtyRef.current.add(key);
+      }
+      doorOpenSinceRef.current.set(key, openAt);
+    });
+  };
 
   agents.forEach((agent) => {
     const sprite = spriteMap.get(agent.id);
@@ -303,17 +354,11 @@ export const runAgentSimulation = ({
 
       let canMove = true;
       if (doorNodesSetRef.current.size > 0) {
-        const curCol = Math.floor(sprite.x / tileSize);
-        const curRow = Math.floor(sprite.y / tileSize);
-        const curDoorKey = nodeKey(curRow, curCol);
+        const currentTile = pixelToTile(sprite.x, sprite.y);
+        const curDoorKey = nodeKey(currentTile.row, currentTile.col);
 
         if (doorNodesSetRef.current.has(curDoorKey)) {
-          const currentDoorState = doorStateRef.current.get(curDoorKey);
-          if (currentDoorState !== "door_open") {
-            doorStateRef.current.set(curDoorKey, "door_open");
-            doorDirtyRef.current.add(curDoorKey);
-          }
-          doorOpenSinceRef.current.set(curDoorKey, now);
+          openDoorCluster(curDoorKey, now);
         }
       }
 
@@ -448,23 +493,19 @@ export const runAgentSimulation = ({
 
   if (doorNodesSetRef.current.size > 0) {
     const occupiedDoorKeys = new Set<string>();
-    agents.forEach((a) => {
-      const s = spriteMap.get(a.id);
-      if (!s) return;
-      const c = Math.floor(s.x / tileSize);
-      const r = Math.floor(s.y / tileSize);
-      const k = nodeKey(r, c);
+    spriteMap.forEach((s) => {
+      const tile = pixelToTile(s.x, s.y);
+      const k = nodeKey(tile.row, tile.col);
       if (doorNodesSetRef.current.has(k)) {
-        occupiedDoorKeys.add(k);
-        if (doorStateRef.current.get(k) !== "door_open") {
-          doorStateRef.current.set(k, "door_open");
-          doorDirtyRef.current.add(k);
-        }
-        doorOpenSinceRef.current.set(k, tickNow);
+        const cluster = doorClusters.get(k) || [k];
+        cluster.forEach((doorKey) => {
+          occupiedDoorKeys.add(doorKey);
+        });
+        openDoorCluster(k, tickNow);
       }
     });
 
-    const keepOpenMs = 300;
+    const keepOpenMs = 1200;
     for (const k of doorNodesSetRef.current) {
       if (occupiedDoorKeys.has(k)) {
         continue;
