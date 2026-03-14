@@ -906,7 +906,7 @@ const upsertAgentFromEvent = (event: EventPayload) => {
         sessionTitle: nextSessionTitle,
         isBackground: nextIsBackground,
         status: nextStatus,
-        source: existing.source || eventSource,
+        source: eventSource || existing.source,
         lastEventType: event?.type || existing.lastEventType,
         lastMessageSnippet: trimmedSnippet,
         lastMessageAt: nextMessageAt,
