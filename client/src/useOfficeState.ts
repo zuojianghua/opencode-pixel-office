@@ -116,7 +116,17 @@ export const useOfficeState = () => {
           if (payload.type === "state" && payload.state) {
             const nextState = payload.state;
             setAgents(nextState.agents || []);
-            setSessions(nextState.sessions || []);
+            const uniqueSessions = (nextState.sessions || []).reduce((acc, session) => {
+              const existing = acc.find((s) => s.id === session.id);
+              if (!existing) {
+                acc.push(session);
+              } else if ((session.updatedAt || 0) > (existing.updatedAt || 0)) {
+                const index = acc.indexOf(existing);
+                acc[index] = session;
+              }
+              return acc;
+            }, [] as SessionInfo[]);
+            setSessions(uniqueSessions);
             setTodos(nextState.todos || []);
             setInteractions(nextState.interactions || []);
             setActiveSessionId(nextState.activeSessionId || null);

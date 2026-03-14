@@ -100,7 +100,7 @@ const IDLE_TTL_MS = 6000;
 const AGENT_STALE_TTL_MS = 3 * 60 * 1000;
 const SESSION_STALE_TTL_MS = 10 * 60 * 1000;
 const MAINTENANCE_INTERVAL_MS = 5000;
-const BACKGROUND_IDLE_RETIRE_MS = 60 * 1000;
+const BACKGROUND_IDLE_RETIRE_MS = 30 * 1000;
 
 const KNOWN_EVENTS = new Set([
   "command.executed",
@@ -733,19 +733,27 @@ const pruneAgents = () => {
     if (
       agent.isBackground &&
       agent.status !== "idle" &&
-      agent.status !== "error" &&
-      agent.lastActivityAt &&
-      now - agent.lastActivityAt > 4000
+      agent.status !== "error"
     ) {
-      officeState.agents.set(key, {
-        ...agent,
-        status: "idle",
-        updatedAt: now,
-      });
+      const backgroundLastActivity =
+        agent.lastActivityAt ||
+        agent.lastEventAt ||
+        agent.updatedAt ||
+        agent.createdAt ||
+        0;
+      if (backgroundLastActivity && now - backgroundLastActivity > 10000) {
+        officeState.agents.set(key, {
+          ...agent,
+          status: "idle",
+          updatedAt: now,
+        });
+      }
     }
     if (agent.isBackground && agent.status === "idle") {
       const backgroundIdleReference =
         lastActivity ||
+        agent.lastEventAt ||
+        agent.updatedAt ||
         agent.createdAt ||
         0;
       if (backgroundIdleReference && now - backgroundIdleReference > BACKGROUND_IDLE_RETIRE_MS) {

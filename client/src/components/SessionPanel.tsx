@@ -35,6 +35,16 @@ const SessionPanel = ({
 }: SessionPanelProps) => {
   const displaySessions = [...sessions]
     .filter((session) => session.id)
+    .reduce((acc, session) => {
+      const existing = acc.find((s) => s.id === session.id);
+      if (!existing) {
+        acc.push(session);
+      } else if ((session.updatedAt || 0) > (existing.updatedAt || 0)) {
+        const index = acc.indexOf(existing);
+        acc[index] = session;
+      }
+      return acc;
+    }, [] as SessionInfo[])
     .sort((a, b) => {
       if (a.id === selectedSessionId) return -1;
       if (b.id === selectedSessionId) return 1;
